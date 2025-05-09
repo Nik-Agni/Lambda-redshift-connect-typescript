@@ -7,7 +7,11 @@ import {
 
 const redshiftClient = new RedshiftDataClient({ region: process.env.AWS_REGION });
 
-export const fetchRedshiftData = async (sql: string): Promise<any[]> => {
+/**
+ * Executes any SQL query (SELECT, INSERT, UPDATE, DELETE).
+ * Returns data only for SELECT statements.
+ */
+export const executeRedshiftQuery = async (sql: string, isSelect = false): Promise<any> => {
   const execCommand = new ExecuteStatementCommand({
     ClusterIdentifier: process.env.REDSHIFT_CLUSTER_ID,
     Database: process.env.REDSHIFT_DB,
@@ -19,26 +23,26 @@ export const fetchRedshiftData = async (sql: string): Promise<any[]> => {
   const statementId = execResult.Id;
   if (!statementId) throw new Error("Failed to execute statement");
 
-  // Wait for query to complete
+  // Wait for the statement to complete
   let status = "STARTED";
-  while (status === "STARTED" || status === "SUBMITTED" || status === "PICKED") {
-    await new Promise((r) => setTimeout(r, 1000));
+  while (["STARTED", "SUBMITTED", "PICKED"].includes(status)) {
+    await new Promise((res) => setTimeout(res, 1000));
     const describe = await redshiftClient.send(new DescribeStatementCommand({ Id: statementId }));
     status = describe.Status ?? "";
     if (status === "FAILED") throw new Error(`Query failed: ${describe.Error}`);
   }
 
-  // Fetch result
+  // Return results for SELECT only
+  if (!isSelect) return { success: true };
+
   const result = await redshiftClient.send(new GetStatementResultCommand({ Id: statementId }));
   const columnNames = result.ColumnMetadata?.map((c) => c.name) || [];
 
-  const rows = (result.Records || []).map((row) => {
-    const values: Record<string, any> = {};
+  return (result.Records || []).map((row) => {
+    const rowObj: Record<string, any> = {};
     row.forEach((col, i) => {
-      values[columnNames[i]] = Object.values(col)[0];
+      rowObj[columnNames[i]] = Object.values(col)[0];
     });
-    return values;
+    return rowObj;
   });
-
-  return rows;
 };
