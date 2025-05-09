@@ -1,0 +1,44 @@
+import {
+  RedshiftDataClient,
+  ExecuteStatementCommand,
+  GetStatementResultCommand,
+  DescribeStatementCommand
+} from "@aws-sdk/client-redshift-data";
+
+const redshiftClient = new RedshiftDataClient({ region: process.env.AWS_REGION });
+
+export const fetchRedshiftData = async (sql: string): Promise<any[]> => {
+  const execCommand = new ExecuteStatementCommand({
+    ClusterIdentifier: process.env.REDSHIFT_CLUSTER_ID,
+    Database: process.env.REDSHIFT_DB,
+    DbUser: process.env.REDSHIFT_USER,
+    Sql: sql
+  });
+
+  const execResult = await redshiftClient.send(execCommand);
+  const statementId = execResult.Id;
+  if (!statementId) throw new Error("Failed to execute statement");
+
+  // Wait for query to complete
+  let status = "STARTED";
+  while (status === "STARTED" || status === "SUBMITTED" || status === "PICKED") {
+    await new Promise((r) => setTimeout(r, 1000));
+    const describe = await redshiftClient.send(new DescribeStatementCommand({ Id: statementId }));
+    status = describe.Status ?? "";
+    if (status === "FAILED") throw new Error(`Query failed: ${describe.Error}`);
+  }
+
+  // Fetch result
+  const result = await redshiftClient.send(new GetStatementResultCommand({ Id: statementId }));
+  const columnNames = result.ColumnMetadata?.map((c) => c.name) || [];
+
+  const rows = (result.Records || []).map((row) => {
+    const values: Record<string, any> = {};
+    row.forEach((col, i) => {
+      values[columnNames[i]] = Object.values(col)[0];
+    });
+    return values;
+  });
+
+  return rows;
+};
